@@ -1,22 +1,54 @@
-import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/sqlite';
+import {
+  Collection,
+  Entity,
+  ManyToMany,
+  ManyToOne,
+  MikroORM,
+  OneToMany,
+  PrimaryKey,
+  Property,
+  Ref,
+} from '@mikro-orm/sqlite';
 
 @Entity()
 class User {
-
   @PrimaryKey()
   id!: number;
 
   @Property()
-  name: string;
+  name!: string;
 
   @Property({ unique: true })
-  email: string;
+  email!: string;
 
-  constructor(name: string, email: string) {
-    this.name = name;
-    this.email = email;
-  }
+  @ManyToOne(() => User, { ref: true, nullable: true })
+  parent?: Ref<User>;
 
+  @OneToMany(() => User, (user) => user.parent)
+  children = new Collection<User>(this);
+
+  @OneToMany(() => Book, (book) => book.owner)
+  ownedBooks = new Collection<Book>(this);
+
+  @ManyToMany({
+    entity: () => Book,
+  })
+  borrowedBooks = new Collection<Book>(this);
+}
+
+@Entity()
+class Book {
+  @PrimaryKey()
+  id!: number;
+
+  @Property()
+  title!: string;
+
+  @ManyToOne(() => User, { ref: true, nullable: true })
+  owner!: Ref<User>;
+
+  @Property({ nullable: true })
+  deletedAt?: Date;
 }
 
 let orm: MikroORM;
@@ -35,17 +67,41 @@ afterAll(async () => {
   await orm.close(true);
 });
 
-test('basic CRUD example', async () => {
-  orm.em.create(User, { name: 'Foo', email: 'foo' });
+test('filters books out', async () => {
+  const parent = orm.em.create(User, {
+    name: 'Parent',
+    email: 'parent@example.com',
+  });
+  const child = orm.em.create(User, {
+    name: 'Child',
+    email: 'child@example.com',
+    parent,
+  });
+  const book1 = orm.em.create(Book, { title: 'Book 1', owner: child });
+  const book2 = orm.em.create(Book, {
+    title: 'Book 2',
+    owner: child,
+    deletedAt: new Date(),
+  });
+  parent.borrowedBooks.add(book1, book2);
   await orm.em.flush();
   orm.em.clear();
 
-  const user = await orm.em.findOneOrFail(User, { email: 'foo' });
-  expect(user.name).toBe('Foo');
-  user.name = 'Bar';
-  orm.em.remove(user);
-  await orm.em.flush();
+  const user = await orm.em.findOneOrFail(
+    User,
+    { name: 'Parent' },
+    {
+      populate: ['children.ownedBooks', 'borrowedBooks'],
+      populateWhere: {
+        children: {
+          ownedBooks: {
+            deletedAt: null,
+          },
+        },
+      },
+    },
+  );
 
-  const count = await orm.em.count(User, { email: 'foo' });
-  expect(count).toBe(0);
+  expect(user.borrowedBooks.length).toBe(2);
+  expect(user.children[0].ownedBooks.length).toBe(1);
 });
