@@ -53,7 +53,7 @@ class Book {
 
 let orm: MikroORM;
 
-beforeAll(async () => {
+beforeEach(async () => {
   orm = await MikroORM.init({
     dbName: ':memory:',
     entities: [User],
@@ -63,11 +63,11 @@ beforeAll(async () => {
   await orm.schema.refreshDatabase();
 });
 
-afterAll(async () => {
+afterEach(async () => {
   await orm.close(true);
 });
 
-test('filters books out', async () => {
+test("filters child's books out", async () => {
   const parent = orm.em.create(User, {
     name: 'Parent',
     email: 'parent@example.com',
@@ -104,4 +104,41 @@ test('filters books out', async () => {
 
   expect(user.borrowedBooks.length).toBe(2);
   expect(user.children[0].ownedBooks.length).toBe(1);
+});
+
+test('filters boorowed books out', async () => {
+  const parent = orm.em.create(User, {
+    name: 'Parent',
+    email: 'parent@example.com',
+  });
+  const child = orm.em.create(User, {
+    name: 'Child',
+    email: 'child@example.com',
+    parent,
+  });
+  const book1 = orm.em.create(Book, { title: 'Book 1', owner: child });
+  const book2 = orm.em.create(Book, {
+    title: 'Book 2',
+    owner: child,
+    deletedAt: new Date(),
+  });
+  parent.borrowedBooks.add(book1, book2);
+  await orm.em.flush();
+  orm.em.clear();
+
+  const user = await orm.em.findOneOrFail(
+    User,
+    { name: 'Parent' },
+    {
+      populate: ['children.ownedBooks', 'borrowedBooks'],
+      populateWhere: {
+        borrowedBooks: {
+          deletedAt: null,
+        },
+      },
+    },
+  );
+
+  expect(user.borrowedBooks.length).toBe(1);
+  expect(user.children[0].ownedBooks.length).toBe(2);
 });
